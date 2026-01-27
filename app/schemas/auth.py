@@ -8,9 +8,11 @@ class ClientRegister(BaseModel):
     password: str
     full_name: str
     company_name: str
+    contact_person_name: str
+    department: str
     phone_number: str
     client_type: str
-    address: str
+    business_address: str
     otp_method: Literal["email", "phone"] = "email"
 
 class Login(BaseModel):
@@ -39,7 +41,7 @@ class ResendOTP(BaseModel):
 class UpdateClientProfile(BaseModel):
     email: Optional[EmailStr] = None
     phone_number: Optional[str] = None
-    address: Optional[str] = None
+    business_address: Optional[str] = None
 
 class ForgotPassword(BaseModel):
     identifier: str  # email or phone

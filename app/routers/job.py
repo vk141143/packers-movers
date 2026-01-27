@@ -13,20 +13,19 @@ import os
 
 router = APIRouter()
 
-@router.post("/jobs", response_model=JobResponse, tags=["Jobs"])
-async def create_job(
+@router.post("/jobs", response_model=JobResponse, tags=["Jobs"], summary="Create Request")
+async def create_request(
     service_type: Optional[str] = Form(None),
-    service_level: Optional[str] = Form(None),
+    urgency_level: Optional[str] = Form(None),
     property_size: Optional[str] = Form(None),
     van_loads: Optional[int] = Form(None),
     waste_types: Optional[str] = Form(None),
-    furniture_items: Optional[int] = Form(0),
+    furniture_items: Optional[int] = Form(None),
     property_address: Optional[str] = Form(None),
-    scheduled_date: Optional[str] = Form(None),
-    scheduled_time: Optional[str] = Form(None),
-    additional_notes: Optional[str] = Form(None),
+    preferred_date: Optional[str] = Form(None),
+    preferred_time: Optional[str] = Form(None),
+    additional_information: Optional[str] = Form(None),
     access_difficulty: Optional[str] = Form(None),
-    compliance_addons: Optional[str] = Form(None),
     property_photos: List[UploadFile] = File(default=[]),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -35,45 +34,14 @@ async def create_job(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     
-    if not service_type or not service_level or not property_address or not scheduled_date or not scheduled_time:
-        raise HTTPException(status_code=400, detail="service_type, service_level, property_address, scheduled_date, and scheduled_time are required")
+    if not service_type or not urgency_level or not property_address or not preferred_date or not preferred_time:
+        raise HTTPException(status_code=400, detail="service_type, urgency_level, property_address, preferred_date, and preferred_time are required")
     
-    # Get service level name from database
-    from app.models.service_level import ServiceLevel
-    service_level_obj = db.query(ServiceLevel).filter(ServiceLevel.id == service_level).first()
-    if not service_level_obj:
-        raise HTTPException(status_code=400, detail="Invalid service_level")
-    
-    # Get service level price directly from database
-    service_level_price = float(service_level_obj.price_gbp) if service_level_obj.price_gbp else 0.0
-    
-    # Parse access difficulty and compliance addons
-    access_list = [a.strip().lower() for a in access_difficulty.split(",")] if access_difficulty else []
-    compliance_list = [c.strip().lower().replace(" ", "_") for c in compliance_addons.split(",")] if compliance_addons else []
-    
-    print(f"DEBUG - service_level: {service_level_obj.name} -> price: £{service_level_price}")
-    print(f"DEBUG - property_size: {property_size}")
-    print(f"DEBUG - van_loads: {van_loads}")
-    print(f"DEBUG - waste_types: {waste_types}")
-    print(f"DEBUG - furniture_items: {furniture_items}")
-    print(f"DEBUG - access_list: {access_list}")
-    print(f"DEBUG - compliance_list: {compliance_list}")
-    
-    # Calculate price using component-based pricing
-    price = calculate_job_price(
-        property_size=property_size or "2bed",
-        van_loads=van_loads or 1,
-        waste_type=waste_types or "general",
-        furniture_items=furniture_items or 0,
-        access_difficulty=access_list,
-        compliance_addons=compliance_list,
-        urgency="standard"  # Not used anymore
-    )
-    
-    # Add service level price from database
-    price += service_level_price
-    
-    print(f"DEBUG - calculated price: {price}")
+    # Get urgency level from database
+    from app.models.urgency_level import UrgencyLevel
+    urgency_level_obj = db.query(UrgencyLevel).filter(UrgencyLevel.id == urgency_level).first()
+    if not urgency_level_obj:
+        raise HTTPException(status_code=400, detail="Invalid urgency_level")
     
     image_paths = []
     if property_photos:
@@ -89,17 +57,16 @@ async def create_job(
     job = Job(
         client_id=str(client.id),
         service_type=service_type,
-        service_level=service_level,
+        urgency_level=urgency_level,
         property_size=property_size,
         van_loads=van_loads,
         waste_types=waste_types,
         furniture_items=furniture_items,
         property_address=property_address,
-        scheduled_date=scheduled_date,
-        scheduled_time=scheduled_time,
+        preferred_date=preferred_date,
+        preferred_time=preferred_time,
         property_photos=",".join(image_paths) if image_paths else None,
-        price=price,
-        additional_notes=additional_notes,
+        additional_information=additional_information,
         status='job_created',
         latitude=lat,
         longitude=lon
@@ -126,267 +93,69 @@ async def create_job(
             
             # Send notification email
             from app.core.email import send_job_assignment_email
-            send_job_assignment_email(nearest_crew[1], nearest_crew[2], job.id, property_address, scheduled_date)
+            send_job_assignment_email(nearest_crew[1], nearest_crew[2], job.id, property_address, preferred_date)
     
     return job
 
-@router.get("/jobs/{job_id}", response_model=JobResponse, tags=["Jobs"])
-async def get_job(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    job = db.query(Job).filter(Job.id == job_id, Job.client_id == str(client.id)).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    return job
-
-@router.get("/jobs", response_model=List[JobResponse], tags=["Jobs"])
-async def get_all_jobs(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    jobs = db.query(Job).filter(Job.client_id == str(client.id)).all()
-    return jobs
-
-@router.get("/client/assigned-crew", tags=["Client"])
-async def get_assigned_crew(
+@router.get("/jobs", tags=["Jobs"], summary="Active Jobs - Currently in Progress")
+async def get_all_requests(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     from sqlalchemy import text
+    from datetime import datetime, timedelta
+    from app.models.service_type import ServiceType
+    from app.models.urgency_level import UrgencyLevel
     
     client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     
-    # Get active job with assigned crew
-    job = db.query(Job).filter(
-        Job.client_id == str(client.id),
-        Job.assigned_crew_id.isnot(None),
-        Job.status.notin_(['job_completed', 'cancelled'])
-    ).order_by(Job.created_at.desc()).first()
-    
-    if not job or not job.assigned_crew_id:
-        return {"crew": None}
-    
-    crew = db.execute(
-        text("SELECT id, full_name, email, phone_number, latitude, longitude FROM crew WHERE id = :crew_id"),
-        {"crew_id": job.assigned_crew_id}
-    ).fetchone()
-    
-    if not crew:
-        return {"crew": None}
-    
-    # Get completed jobs count and average rating
-    completed_count = db.execute(
-        text("SELECT COUNT(*) FROM jobs WHERE assigned_crew_id = :crew_id AND status = 'job_completed'"),
-        {"crew_id": crew[0]}
-    ).scalar()
-    
-    # Calculate average rating (if rating column exists)
-    avg_rating = db.execute(
-        text("SELECT AVG(rating) FROM jobs WHERE assigned_crew_id = :crew_id AND status = 'job_completed' AND rating IS NOT NULL"),
-        {"crew_id": crew[0]}
-    ).scalar()
-    
-    rating = round(float(avg_rating), 1) if avg_rating else 4.8
-    
-    # Reverse geocode crew location
-    location = "Unknown"
-    if crew[4] and crew[5]:
-        from geopy.geocoders import Nominatim
-        try:
-            geolocator = Nominatim(user_agent="emergency_clearance")
-            loc = geolocator.reverse(f"{crew[4]}, {crew[5]}")
-            if loc and loc.address:
-                parts = loc.address.split(',')
-                location = parts[-3].strip() if len(parts) >= 3 else parts[0].strip()
-        except:
-            location = "Unknown"
-    
-    return {
-        "crew": {
-            "name": crew[1],
-            "email": crew[2],
-            "phone": crew[3] or "+44 7700 900124",
-            "location": location,
-            "rating": rating,
-            "jobs_completed": completed_count or 0
-        }
-    }
-
-@router.get("/jobs/{job_id}/details", tags=["Jobs"])
-async def get_job_details(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    from sqlalchemy import text
-    from app.models.service import Service
-    from app.models.service_level import ServiceLevel
-    from app.models.invoice import Invoice
-    
-    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    job = db.query(Job).filter(Job.id == job_id, Job.client_id == str(client.id)).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    # Get service name
-    service = db.query(Service).filter(Service.id == job.service_type).first()
-    service_name = service.name if service else job.service_type
-    
-    # Get service level name
-    service_level = db.query(ServiceLevel).filter(ServiceLevel.id == job.service_level).first()
-    sla_name = service_level.name if service_level else job.service_level
-    
-    # Get assigned crew names
-    crew_names = "Not assigned"
-    if job.assigned_crew_id:
-        crew_result = db.execute(
-            text("SELECT full_name FROM crew WHERE id = :crew_id"),
-            {"crew_id": job.assigned_crew_id}
-        ).fetchone()
-        if crew_result:
-            crew_names = crew_result[0]
-    
-    # Get invoice details
-    invoice = db.query(Invoice).filter(Invoice.job_id == job_id).first()
-    invoice_data = None
-    if invoice:
-        invoice_data = {
-            "invoice_id": invoice.invoice_number,
-            "amount": float(invoice.amount),
-            "status": invoice.status,
-            "pdf_path": invoice.pdf_path
-        }
-    
-    return {
-        "job_id": job.id,
-        "service_type": service_name,
-        "sla_type": sla_name,
-        "property_address": job.property_address,
-        "scheduled_date": job.scheduled_date,
-        "scheduled_time": job.scheduled_time,
-        "booking_date": job.created_at.strftime("%d/%m/%Y, %H:%M:%S") if job.created_at else None,
-        "completion_date": job.updated_at.strftime("%d/%m/%Y, %H:%M:%S") if job.status == "job_completed" and job.updated_at else None,
-        "assigned_crew": crew_names,
-        "job_status": job.status,
-        "invoice": invoice_data
-    }
-
-@router.get("/jobs/completed/all", tags=["Jobs"])
-async def get_all_completed_jobs(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    from sqlalchemy import text
-    from app.models.service import Service
-    from app.models.service_level import ServiceLevel
-    from app.models.invoice import Invoice
-    
-    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    jobs = db.query(Job).filter(
-        Job.client_id == str(client.id),
-        Job.status == "job_completed"
-    ).order_by(Job.updated_at.desc()).all()
+    jobs = db.query(Job).filter(Job.client_id == str(client.id)).order_by(Job.created_at.desc()).all()
     
     result = []
     for job in jobs:
-        # Get service name
-        service = db.query(Service).filter(Service.id == job.service_type).first()
-        service_name = service.name if service else job.service_type
+        # Get service type name
+        service = db.query(ServiceType).filter(ServiceType.id == job.service_type).first()
+        service_type_name = service.name if service else "Unknown Service"
         
-        # Get service level name
-        service_level = db.query(ServiceLevel).filter(ServiceLevel.id == job.service_level).first()
-        sla_name = service_level.name if service_level else job.service_level
+        # Get SLA hours from urgency level
+        sla_hours = 24  # default
+        urgency_level = db.query(UrgencyLevel).filter(UrgencyLevel.id == job.urgency_level).first()
+        if urgency_level:
+            sla_hours = urgency_level.sla_hours
         
-        # Get assigned crew names
-        crew_names = "Not assigned"
-        if job.assigned_crew_id:
-            crew_result = db.execute(
-                text("SELECT full_name FROM crew WHERE id = :crew_id"),
-                {"crew_id": job.assigned_crew_id}
-            ).fetchone()
-            if crew_result:
-                crew_names = crew_result[0]
+        # Calculate SLA status
+        sla_deadline = job.created_at + timedelta(hours=sla_hours)
+        now = datetime.utcnow()
         
-        # Get invoice details
-        invoice = db.query(Invoice).filter(Invoice.job_id == job.id).first()
-        invoice_data = None
-        if invoice:
-            invoice_data = {
-                "invoice_id": invoice.invoice_number,
-                "amount": float(invoice.amount),
-                "status": invoice.status
-            }
+        if job.status == "job_completed":
+            # Completed job - check if completed within SLA
+            if job.updated_at <= sla_deadline:
+                sla_status = "SLA Met"
+            else:
+                sla_status = "SLA Breached"
+        else:
+            # Job in progress - show "On Track" if within SLA time
+            if now <= sla_deadline:
+                sla_status = "On Track"
+            else:
+                sla_status = "SLA Breached"
         
         result.append({
-            "job_id": job.id,
-            "service_type": service_name,
-            "sla_type": sla_name,
+            "id": job.id,
+            "service_type_name": service_type_name,
             "property_address": job.property_address,
-            "scheduled_date": job.scheduled_date,
-            "scheduled_time": job.scheduled_time,
-            "booking_date": job.created_at.strftime("%d/%m/%Y, %H:%M:%S") if job.created_at else None,
-            "completion_date": job.updated_at.strftime("%d/%m/%Y, %H:%M:%S") if job.updated_at else None,
-            "assigned_crew": crew_names,
-            "job_status": job.status,
-            "invoice": invoice_data
+            "preferred_date": job.preferred_date,
+            "preferred_time": job.preferred_time,
+            "price": job.quote_amount if job.quote_amount else 0.0,
+            "status": job.status,
+            "sla_status": sla_status,
+            "created_at": job.created_at,
+            "updated_at": job.updated_at
         })
     
-    return {"jobs": result, "total": len(result)}
-
-@router.get("/jobs/{job_id}/invoice/download", tags=["Jobs"])
-async def download_invoice(
-    job_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    from fastapi.responses import StreamingResponse
-    from app.models.invoice import Invoice
-    import io
-    
-    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    job = db.query(Job).filter(Job.id == job_id, Job.client_id == str(client.id)).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status != "job_completed":
-        raise HTTPException(status_code=400, detail="Invoice only available for completed jobs")
-    
-    invoice = db.query(Invoice).filter(Invoice.job_id == job_id).first()
-    if not invoice or not invoice.pdf_path:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    
-    # Download from bucket
-    pdf_content = storage.download_file(invoice.pdf_path)
-    if not pdf_content:
-        raise HTTPException(status_code=404, detail="Invoice file not found in storage")
-    
-    return StreamingResponse(
-        io.BytesIO(pdf_content),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={invoice.invoice_number}.pdf"}
-    )
+    return result
 
 @router.post("/jobs/{job_id}/rating", tags=["Jobs"])
 async def submit_job_rating(
@@ -445,9 +214,13 @@ async def get_job_rating(
 @router.delete("/jobs/{job_id}/cancel", tags=["Jobs"])
 async def cancel_job(
     job_id: str,
+    cancellation_reason: str = Form(...),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    from sqlalchemy import text
+    from app.models.payment import Payment
+    
     client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -456,18 +229,478 @@ async def cancel_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    cancellable_statuses = ['job_created', 'crew_assigned', 'crew_dispatched', 'crew_arrived', 'before_photo']
+    # Check if deposit payment exists and is completed
+    deposit_payment = db.query(Payment).filter(
+        Payment.job_id == job_id,
+        Payment.payment_type == "deposit",
+        Payment.payment_status == "completed"
+    ).first()
+    
+    if deposit_payment:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cancellation not allowed. Deposit of £{deposit_payment.amount} has been paid and is non-refundable as per our cancellation policy. Please contact support for assistance."
+        )
+    
+    # Only allow cancellation before crew uploads before photos
+    cancellable_statuses = ['job_created', 'quote_sent', 'quote_accepted', 'crew_assigned', 'crew_dispatched', 'crew_arrived']
     if job.status not in cancellable_statuses:
         raise HTTPException(
             status_code=400, 
-            detail="Job cannot be cancelled after OTP verification. Current status: " + job.status
+            detail="Job cannot be cancelled after crew has started work. Current status: " + job.status
+        )
+    
+    # If crew was assigned, set them back to available
+    if job.assigned_crew_id:
+        db.execute(
+            text("UPDATE crew SET status = 'available' WHERE id = :crew_id"),
+            {"crew_id": job.assigned_crew_id}
         )
     
     job.status = 'cancelled'
+    job.cancellation_reason = cancellation_reason
     db.commit()
     
     return {
-        "message": "Job cancelled successfully",
+        "message": "Job cancelled successfully. No charges applied.",
+        "job_id": job.id,
+        "status": job.status,
+        "cancellation_reason": cancellation_reason
+    }
+
+@router.get("/client/quotes", tags=["Client"], summary="Get All Quotes for Client")
+async def get_client_quotes(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    jobs = db.query(Job).filter(
+        Job.client_id == str(client.id),
+        Job.status.in_(["quote_sent", "quote_accepted", "quote_rejected"])
+    ).order_by(Job.created_at.desc()).all()
+    
+    result = []
+    for job in jobs:
+
+        from app.models.service_type import ServiceType
+        service = db.query(ServiceType).filter(ServiceType.id == job.service_type).first()
+        service_type_name = service.name if service else "Unknown"
+        
+        result.append({
+            "job_id": job.id,
+            "property_address": job.property_address,
+            "service_type": service_type_name,
+            "preferred_date": job.preferred_date if job.preferred_date else "",
+            "quote_amount": job.quote_amount if job.quote_amount else 0.0,
+            "deposit_amount": job.deposit_amount if job.deposit_amount else 0.0,
+            "quote_notes": job.quote_notes if job.quote_notes else "",
+            "status": "Awaiting Approval" if job.status == "quote_sent" else job.status,
+            "created_at": job.created_at.isoformat() if job.created_at else ""
+        })
+    
+    return result
+
+@router.get("/client/quotes/{job_id}", tags=["Client"], summary="Get Quote Details by ID")
+async def get_quote_by_id(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.client_id == str(client.id)
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    
+    # Get service type name
+    from app.models.service_type import ServiceType
+    service = db.query(ServiceType).filter(ServiceType.id == job.service_type).first()
+    service_type_name = service.name if service else "Unknown"
+    
+    # Get urgency level name
+    from app.models.urgency_level import UrgencyLevel
+    urgency = db.query(UrgencyLevel).filter(UrgencyLevel.id == job.urgency_level).first()
+    urgency_name = urgency.name if urgency else ""
+    
+    return {
+        "job_id": job.id,
+        "property_address": job.property_address,
+        "service_type": service_type_name,
+        "urgency_level": urgency_name,
+        "preferred_date": job.preferred_date if job.preferred_date else "",
+        "preferred_time": job.preferred_time if job.preferred_time else "",
+        "quote_amount": job.quote_amount if job.quote_amount else 0.0,
+        "deposit_amount": job.deposit_amount if job.deposit_amount else 0.0,
+        "quote_notes": job.quote_notes if job.quote_notes else "",
+        "status": job.status,
+        "created_at": job.created_at.isoformat() if job.created_at else ""
+    }
+
+@router.post("/client/quotes/{job_id}/approve", tags=["Client"], summary="Approve Quote")
+async def approve_quote(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.client_id == str(client.id)
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    
+    if job.status != "quote_sent":
+        raise HTTPException(status_code=400, detail="Quote already processed")
+    
+    job.status = "quote_accepted"
+    db.commit()
+    
+    return {
+        "message": "Quote approved successfully",
         "job_id": job.id,
         "status": job.status
     }
+
+@router.post("/client/quotes/{job_id}/decline", tags=["Client"], summary="Decline Quote")
+async def decline_quote(
+    job_id: str,
+    decline_reason: str = Form(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.client_id == str(client.id)
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    
+    if job.status != "quote_sent":
+        raise HTTPException(status_code=400, detail="Quote already processed")
+    
+    job.status = "quote_rejected"
+    job.decline_reason = decline_reason
+    db.commit()
+    
+    return {
+        "message": "Quote declined",
+        "job_id": job.id,
+        "status": job.status,
+        "decline_reason": decline_reason
+    }
+
+@router.get("/client/tracking", tags=["Client"], summary="Job Tracking - Get All Active Jobs")
+async def get_job_tracking(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Get all jobs including completed (exclude only cancelled)
+    jobs = db.query(Job).filter(
+        Job.client_id == str(client.id),
+        Job.status != "cancelled"
+    ).order_by(Job.created_at.desc()).all()
+    
+    result = []
+    for job in jobs:
+        # Get service type name
+        from app.models.service_type import ServiceType
+        service = db.query(ServiceType).filter(ServiceType.id == job.service_type).first()
+        service_name = service.name if service else "Unknown"
+        
+        # Determine display status
+        if job.status == "job_created":
+            display_status = "Awaiting Quote"
+        elif job.status == "quote_sent":
+            display_status = "Quote Sent"
+        elif job.status == "quote_accepted":
+            display_status = "Booking Confirmed"
+        elif job.status == "crew_assigned":
+            display_status = "Crew Assigned"
+        elif job.status == "crew_arrived":
+            display_status = "Arrived at Property"
+        elif job.status in ["before_photo", "clearance_in_progress", "after_photo"]:
+            display_status = "Work Started"
+        elif job.status == "work_completed":
+            display_status = "Awaiting Final Payment"
+        elif job.status == "job_completed":
+            display_status = "Completed"
+        else:
+            display_status = job.status
+        
+        result.append({
+            "job_id": job.id,
+            "property_address": job.property_address,
+            "service_type": service_name,
+            "created_at": job.created_at.strftime("%m/%d/%Y") if job.created_at else "",
+            "total_amount": job.quote_amount if hasattr(job, 'quote_amount') and job.quote_amount else 0.0,
+            "scheduled_date": job.preferred_date if hasattr(job, 'preferred_date') and job.preferred_date else "",
+            "status": display_status,
+            "can_cancel": job.status in ["job_created", "quote_sent", "quote_accepted", "crew_assigned", "crew_arrived"]
+        })
+    
+    return result
+
+@router.get("/client/history", tags=["Client"], summary="Job History - Get All Completed Jobs")
+async def get_job_history(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Get all jobs (including active, completed, cancelled)
+    jobs = db.query(Job).filter(
+        Job.client_id == str(client.id)
+    ).order_by(Job.created_at.desc()).all()
+    
+    result = []
+    for job in jobs:
+        from app.models.service_type import ServiceType
+        from app.models.payment import Payment
+        
+        service = db.query(ServiceType).filter(ServiceType.id == job.service_type).first()
+        service_name = service.name if service else "Unknown"
+        
+        # Check payment status
+        deposit_payment = db.query(Payment).filter(
+            Payment.job_id == job.id,
+            Payment.payment_type == "deposit",
+            Payment.payment_status == "completed"
+        ).first()
+        
+        # Determine status badge
+        if job.status == "job_created":
+            status_badge = "Quote Pending"
+            status_color = "warning"
+        elif job.status == "quote_sent":
+            status_badge = "Quote Sent"
+            status_color = "info"
+        elif job.status == "quote_accepted" and deposit_payment:
+            status_badge = "Paid - Crew Assignment"
+            status_color = "success"
+        elif job.status == "quote_accepted":
+            status_badge = "Awaiting Payment"
+            status_color = "warning"
+        elif job.status in ["crew_assigned", "crew_arrived"]:
+            status_badge = "In Progress"
+            status_color = "info"
+        elif job.status in ["before_photo", "clearance_in_progress", "after_photo"]:
+            status_badge = "Work In Progress"
+            status_color = "info"
+        elif job.status == "work_completed":
+            status_badge = "Awaiting Final Payment"
+            status_color = "warning"
+        elif job.status == "job_completed":
+            status_badge = "Paid - Invoice Generated"
+            status_color = "success"
+        elif job.status == "cancelled":
+            status_badge = "Cancelled"
+            status_color = "error"
+        else:
+            status_badge = job.status
+            status_color = "default"
+        
+        # Build workflow progress
+        workflow_steps = [
+            {"name": "Request", "completed": True},
+            {"name": "Quote", "completed": job.status not in ["job_created"]},
+            {"name": "Payment", "completed": deposit_payment is not None},
+            {"name": "Crew", "completed": job.status in ["crew_assigned", "crew_arrived", "before_photo", "clearance_in_progress", "after_photo", "work_completed", "job_completed"]},
+            {"name": "Work", "completed": job.status in ["before_photo", "clearance_in_progress", "after_photo", "work_completed", "job_completed"]},
+            {"name": "Complete", "completed": job.status == "job_completed"}
+        ]
+        
+        result.append({
+            "job_id": job.id,
+            "service_type": service_name,
+            "property_address": job.property_address,
+            "scheduled_date": job.preferred_date if hasattr(job, 'preferred_date') and job.preferred_date else "",
+            "status_badge": status_badge,
+            "workflow_progress": workflow_steps
+        })
+    
+    return result
+
+@router.get("/client/completed-jobs", tags=["Client"], summary="Recently Completed Jobs")
+async def get_completed_jobs(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Get completed jobs
+    jobs = db.query(Job).filter(
+        Job.client_id == str(client.id),
+        Job.status == "job_completed"
+    ).order_by(Job.updated_at.desc()).all()
+    
+    completed_jobs = []
+    for job in jobs:
+        # Get first property photo if available
+        property_photo = None
+        if job.property_photos:
+            photos = job.property_photos.split(",")
+            property_photo = photos[0] if photos else None
+        
+        completed_jobs.append({
+            "job_id": job.id,
+            "completion_date": job.updated_at.strftime("%d %b %Y") if job.updated_at else "",
+            "property_photo": property_photo,
+            "total_amount": float(job.quote_amount) if job.quote_amount else 0.0,
+            "status": "Completed"
+        })
+    
+    return completed_jobs
+
+@router.get("/client/tracking/{job_id}", tags=["Client"], summary="Get Job Tracking Details by ID")
+async def get_job_tracking_details(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from sqlalchemy import text
+    
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    job = db.query(Job).filter(
+        Job.id == job_id,
+        Job.client_id == str(client.id)
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Determine display status
+    if job.status == "job_created":
+        display_status = "Awaiting Quote"
+    elif job.status == "quote_sent":
+        display_status = "Quote Sent"
+    elif job.status == "quote_accepted":
+        display_status = "Booking Confirmed"
+    elif job.status == "crew_assigned":
+        display_status = "Crew Assigned"
+    elif job.status in ["crew_assigned", "crew_arrived", "before_photo", "clearance_in_progress", "after_photo"]:
+        display_status = "Work In Progress"
+    elif job.status == "work_completed":
+        display_status = "Work Completed"
+    elif job.status == "job_completed":
+        display_status = "Job Completed"
+    else:
+        display_status = job.status
+    
+    # Build progress steps
+    progress_steps = [
+        {
+            "step": 1,
+            "title": "Crew Assigned",
+            "completed": job.status in ["crew_assigned", "crew_arrived", "before_photo", "clearance_in_progress", "after_photo", "work_completed", "job_completed"]
+        },
+        {
+            "step": 2,
+            "title": "Arrived at Property",
+            "completed": job.status in ["crew_arrived", "before_photo", "clearance_in_progress", "after_photo", "work_completed", "job_completed"]
+        },
+        {
+            "step": 3,
+            "title": "Work Started",
+            "completed": job.status in ["before_photo", "clearance_in_progress", "after_photo", "work_completed", "job_completed"]
+        },
+        {
+            "step": 4,
+            "title": "Work Completed",
+            "completed": job.status in ["work_completed", "job_completed"]
+        }
+    ]
+    
+    # Get crew details if assigned
+    crew_details = None
+    if job.assigned_crew_id:
+        try:
+            crew_result = db.execute(
+                text("SELECT full_name, phone_number, email FROM crew WHERE id = :id"),
+                {"id": job.assigned_crew_id}
+            ).fetchone()
+            
+            if crew_result:
+                # Get crew rating (average of all completed jobs)
+                rating_result = db.execute(
+                    text("SELECT AVG(rating) FROM jobs WHERE assigned_crew_id = :id AND rating IS NOT NULL"),
+                    {"id": job.assigned_crew_id}
+                ).fetchone()
+                
+                crew_details = {
+                    "name": crew_result[0],
+                    "phone_number": crew_result[1],
+                    "email": crew_result[2],
+                    "rating": round(float(rating_result[0]), 1) if rating_result and rating_result[0] else None
+                }
+        except Exception as e:
+            print(f"Error fetching crew details: {e}")
+    
+    return {
+        "job_id": job.id,
+        "property_address": job.property_address,
+        "status": display_status,
+        "progress": progress_steps,
+        "crew_details": crew_details
+    }
+
+@router.get("/client/payment-requests", tags=["Client"], summary="Get Pending Payment Requests")
+async def get_payment_requests(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    client = db.query(Client).filter(Client.id == current_user.get("sub")).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Get jobs with work_completed status (awaiting final payment)
+    jobs = db.query(Job).filter(
+        Job.client_id == str(client.id),
+        Job.status == "work_completed"
+    ).order_by(Job.updated_at.desc()).all()
+    
+    result = []
+    for job in jobs:
+        deposit_paid = job.deposit_amount if job.deposit_amount else 0.0
+        final_price = job.quote_amount if job.quote_amount else 0.0
+        remaining_amount = final_price - deposit_paid
+        
+        result.append({
+            "job_id": job.id,
+            "property_address": job.property_address,
+            "final_price": final_price,
+            "deposit_paid": deposit_paid,
+            "remaining_amount": remaining_amount,
+            "completed_at": job.updated_at.isoformat() if job.updated_at else ""
+        })
+    
+    return result

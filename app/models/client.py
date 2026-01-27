@@ -15,10 +15,11 @@ class Client(Base):
     password = Column(String, nullable=False)
     full_name = Column(String)
     company_name = Column(String)
+    contact_person_name = Column(String)
+    department = Column(String)
     phone_number = Column(String)
     client_type = Column(String)
-    address = Column(String)
-    profile_photo = Column(String, nullable=True)
+    business_address = Column(String)
     is_verified = Column(Boolean, default=False)
     otp = Column(String)
     otp_expiry = Column(DateTime)
@@ -37,7 +38,7 @@ class Client(Base):
         return db.query(Client).filter(Client.email == email).first()
     
     @staticmethod
-    def create(db, email: str, password: str, full_name: str = None, company_name: str = None, phone_number: str = None, client_type: str = None, address: str = None, otp_method: str = "email"):
+    def create(db, email: str, password: str, full_name: str = None, company_name: str = None, contact_person_name: str = None, department: str = None, phone_number: str = None, client_type: str = None, business_address: str = None, otp_method: str = "email"):
         otp = str(random.randint(1000, 9999))
         otp_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10)
         
@@ -46,9 +47,11 @@ class Client(Base):
             password=password,
             full_name=full_name,
             company_name=company_name,
+            contact_person_name=contact_person_name,
+            department=department,
             phone_number=phone_number,
             client_type=client_type,
-            address=address,
+            business_address=business_address,
             is_verified=False,
             otp=otp,
             otp_expiry=otp_expiry,

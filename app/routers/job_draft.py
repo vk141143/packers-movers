@@ -3,9 +3,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.core.security import verify_token
-from app.core.pricing import calculate_job_price
 from app.models.job import Job
-from app.models.service_level import ServiceLevel
+from app.models.urgency_level import UrgencyLevel
 from app.schemas.job_draft import JobResponse, ConfirmJob
 from app.schemas.auth import MessageResponse
 from typing import List, Optional
@@ -29,15 +28,14 @@ async def get_job_draft(
         return JobResponse(
             id=job.id,
             property_address=job.property_address,
-            date=job.scheduled_date,
-            time=job.scheduled_time,
+            date=job.preferred_date,
+            time=job.preferred_time,
             service_id=job.service_type,
-            service_level_id=job.service_level,
+            urgency_level_id=job.urgency_level,
             property_size=job.property_size,
             van_loads=job.van_loads,
             waste_types=job.waste_types,
             furniture_items=job.furniture_items,
-            price=job.price,
             status=job.status,
             created_at=job.created_at.isoformat() if job.created_at else ""
         )
@@ -56,15 +54,14 @@ async def get_all_draft_jobs(
             JobResponse(
                 id=job.id,
                 property_address=job.property_address,
-                date=job.scheduled_date,
-                time=job.scheduled_time,
+                date=job.preferred_date,
+                time=job.preferred_time,
                 service_id=job.service_type,
-                service_level_id=job.service_level,
+                urgency_level_id=job.urgency_level,
                 property_size=job.property_size,
                 van_loads=job.van_loads,
                 waste_types=job.waste_types,
                 furniture_items=job.furniture_items,
-                price=job.price,
                 status=job.status,
                 created_at=job.created_at.isoformat() if job.created_at else ""
             )
@@ -76,43 +73,35 @@ async def get_all_draft_jobs(
 @router.post("/", response_model=JobResponse)
 async def create_job_draft(
     property_address: Optional[str] = Form(None),
-    date: Optional[str] = Form(None),
-    time: Optional[str] = Form(None),
+    preferred_date: Optional[str] = Form(None),
+    preferred_time: Optional[str] = Form(None),
     service_type: Optional[str] = Form(None),
-    service_level: Optional[str] = Form(None),
+    urgency_level: Optional[str] = Form(None),
     property_size: Optional[str] = Form(None),
     van_loads: Optional[int] = Form(None),
     waste_types: Optional[str] = Form(None),
     furniture_items: Optional[int] = Form(None),
+    additional_information: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     """Create job draft without authentication - for price estimation"""
     try:
-        # Get service level name from database
-        service_level_obj = db.query(ServiceLevel).filter(ServiceLevel.id == service_level).first()
-        if not service_level_obj:
-            raise HTTPException(status_code=400, detail="Invalid service_level")
-        
-        # Calculate price using new component-based pricing
-        estimated_price = calculate_job_price(
-            property_size=property_size or "2bed",
-            van_loads=van_loads or 1,
-            waste_type=waste_types or "general",
-            furniture_items=furniture_items or 0,
-            urgency="standard"
-        )
+        # Get urgency level from database
+        urgency_level_obj = db.query(UrgencyLevel).filter(UrgencyLevel.id == urgency_level).first()
+        if not urgency_level_obj:
+            raise HTTPException(status_code=400, detail="Invalid urgency_level")
         
         job = Job(
             property_address=property_address,
-            scheduled_date=date,
-            scheduled_time=time,
+            preferred_date=preferred_date,
+            preferred_time=preferred_time,
             service_type=service_type,
-            service_level=service_level,
+            urgency_level=urgency_level,
             property_size=property_size,
             van_loads=van_loads,
             waste_types=waste_types,
             furniture_items=furniture_items,
-            price=estimated_price,
+            additional_information=additional_information,
             status='pending'
         )
         db.add(job)
@@ -122,15 +111,14 @@ async def create_job_draft(
         return JobResponse(
             id=job.id,
             property_address=job.property_address,
-            date=job.scheduled_date,
-            time=job.scheduled_time,
+            date=job.preferred_date,
+            time=job.preferred_time,
             service_id=job.service_type,
-            service_level_id=job.service_level,
+            urgency_level_id=job.urgency_level,
             property_size=job.property_size,
             van_loads=job.van_loads,
             waste_types=job.waste_types,
             furniture_items=job.furniture_items,
-            price=job.price,
             status=job.status,
             created_at=job.created_at.isoformat() if job.created_at else ""
         )

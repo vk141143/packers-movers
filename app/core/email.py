@@ -2,9 +2,16 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from project root
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_FILE = BASE_DIR / ".env"
+if ENV_FILE.exists():
+    load_dotenv(ENV_FILE, override=True)
+else:
+    load_dotenv(override=True)
 
 def send_otp_email(email: str, otp: str):
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
@@ -34,7 +41,7 @@ def send_otp_email(email: str, otp: str):
     msg.attach(MIMEText(body, 'plain'))
     
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)  # Add 10 second timeout
         server.starttls()
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
@@ -42,6 +49,7 @@ def send_otp_email(email: str, otp: str):
         print(f"OTP sent to {email}")
     except Exception as e:
         print(f"Failed to send OTP email: {e}")
+        raise  # Re-raise to let caller handle
 
 def send_password_reset_email(email: str, reset_token: str):
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")

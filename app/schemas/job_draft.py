@@ -7,7 +7,7 @@ class CreateJob(BaseModel):
     date: date
     time: time
     service_id: int
-    service_level_id: str
+    urgency_level_id: str
     property_size: Optional[str] = None
     van_loads: Optional[int] = None
     waste_types: Optional[str] = None
@@ -19,12 +19,11 @@ class JobResponse(BaseModel):
     date: str
     time: str
     service_id: int
-    service_level_id: str
+    urgency_level_id: str
     property_size: Optional[str] = None
     van_loads: Optional[int] = None
     waste_types: Optional[str] = None
     furniture_items: Optional[int] = None
-    price: float
     status: str
     created_at: str
     

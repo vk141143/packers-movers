@@ -14,7 +14,7 @@ class PriceEstimateRequest(BaseModel):
     urgency: str = "standard"
     compliance_addons: Optional[List[str]] = None
 
-@router.post("/estimate-price", tags=["Pricing"])
+@router.post("/estimate-price", tags=["Pricing"], include_in_schema=False)
 async def estimate_price(request: PriceEstimateRequest):
     """
     Calculate instant price estimate based on job details.

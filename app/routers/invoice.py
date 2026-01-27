@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.models.invoice import Invoice
 from app.models.client import Client
+from app.models.job import Job
 from app.core.security import get_current_user
 from typing import List
 import os
@@ -58,24 +59,37 @@ async def get_invoice_history(
             detail="Client not found"
         )
     
-    # Get all invoices for this client
+    # Get all invoices for this client with job details
     invoices = db.query(Invoice).filter(
         Invoice.client_id == client.id
     ).order_by(Invoice.generated_at.desc()).all()
     
+    invoice_list = []
+    for invoice in invoices:
+        job = db.query(Job).filter(Job.id == invoice.job_id).first()
+        
+        # Get service type name from database
+        service_type_name = "Unknown Service"
+        if job and job.service_type:
+            from app.models.service_type import ServiceType
+            service = db.query(ServiceType).filter(ServiceType.id == job.service_type).first()
+            if service:
+                service_type_name = service.name
+        
+        invoice_list.append({
+            "invoice_id": invoice.id,
+            "invoice_number": invoice.invoice_number,
+            "job_id": invoice.job_id,
+            "service_type": service_type_name,
+            "invoice_date": invoice.generated_at.strftime("%d %b %Y"),
+            "total_amount": float(invoice.amount),
+            "payment_status": "Paid in Full" if invoice.status in ["paid", "generated"] else invoice.status.title(),
+            "property_address": job.property_address if job else "N/A"
+        })
+    
     return {
-        "invoices": [
-            {
-                "invoice_id": invoice.id,
-                "invoice_number": invoice.invoice_number,
-                "job_id": invoice.job_id,
-                "amount": float(invoice.amount),
-                "status": invoice.status,
-                "generated_at": invoice.generated_at,
-                "action": f"/api/client/invoices/{invoice.id}/download"
-            }
-            for invoice in invoices
-        ]
+        "total_invoices": len(invoice_list),
+        "invoices": invoice_list
     }
 
 @router.get("/client/invoices/{invoice_id}/download", tags=["Client"])
